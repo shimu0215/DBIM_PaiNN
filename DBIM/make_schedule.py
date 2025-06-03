@@ -30,6 +30,6 @@ def make_noise_schedule(T=1000, eta=0.0, device=None):
     cts = sigmas * torch.sqrt(1 - snrT_to_t)
 
     rhos = eta * sigmas[:-1] * torch.sqrt(1 - snrs[1:] / snrs[:-1])
-    rhos = torch.cat([rhos[:-1], cts[-1:]], dim=0)  # enforce rho_{N-1} = c_{t_{N-1}}
+    rhos = torch.cat([rhos[:], cts[-1:]], dim=0) # enforce rho_{N-1} = c_{t_{N-1}}
 
     return ats, bts, cts, rhos, sigmas

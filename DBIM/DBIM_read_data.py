@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 import numpy as np
 
-from generate_rdkit import *
+# from generate_rdkit import *
 
 
 def nbatch_transform(indices):

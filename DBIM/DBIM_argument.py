@@ -7,11 +7,11 @@ def parse_opt_DBIM():
 
     parser.add_argument('--device', type=str, default="auto", help='Computation device.')
 
-    parser.add_argument('--data_path', type=str, default="../../data/tmp", help='Computation device.')
+    parser.add_argument('--data_path', type=str, default="../data_rd/data_rd_test", help='Computation device.')
     parser.add_argument('--max_atom_number', type=int, default=29, help='Computation device.')
     parser.add_argument('--max_atom_id', type=int, default=10, help='Computation device.')
 
-    parser.add_argument('--batch_size', type=int, default=32, help='Computation device.')
+    parser.add_argument('--batch_size', type=int, default=256, help='Computation device.')
     parser.add_argument('--train_ratio', type=float, default=0.6, help='Computation device.')
     parser.add_argument('--val_ratio', type=float, default=0.2, help='Computation device.')
 
