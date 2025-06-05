@@ -12,7 +12,7 @@ class DBIMLoss(nn.Module):
         self.mse_loss = nn.MSELoss()
         self.sigma_data = sigma_data
 
-    def forward(self, model_predict, xt, x0, node_mask, noise):
+    def forward(self, model_predict, xt, x0, node_mask, noise, sigma_t, weighted=False):
 
         # F_theta = model_predict - xt
         # x_theta = xt - F_theta
@@ -24,14 +24,19 @@ class DBIMLoss(nn.Module):
         # model_predict = model_predict / sigma ** 2
         # x0 = x0 / sigma ** 2
 
-        loss = self.mse_loss(model_predict * node_mask, x0 * node_mask)
-
+        if weighted:
+            weight = (sigma_t ** 2 + self.sigma_data ** 2) / (sigma_t * self.sigma_data) ** 2
+            wse = weight * (model_predict * node_mask - x0 * node_mask) ** 2
+            loss = wse.mean()
+        else:
+            loss = self.mse_loss(model_predict * node_mask, x0 * node_mask)
+        # loss = weight *
         # loss = self.mse_loss((model_predict-xt) * node_mask, noise * node_mask)
 
         return loss
 
 class DBIMGenerativeModel(nn.Module):
-    def __init__(self, number_tokens = None, dim = 17, num_layers=11, in_features=16, m_dim=256, T=1000):
+    def __init__(self, number_tokens = None, dim = 17, num_layers=3, in_features=16, m_dim=16, T=1000):
         super(DBIMGenerativeModel, self).__init__()
         self.egnn = EGNN_Network(
                                     # num_tokens = number_tokens,

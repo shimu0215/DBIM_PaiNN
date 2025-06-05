@@ -81,7 +81,7 @@ def evaluate(val_loader, generative_model, ats, bts, cts, criterion, pretrained_
         evaluating_loss = 0.0
         for batch_idx, data in enumerate(val_loader):
 
-            h, xt, xT, t_norm, node_mask, noise, x0 = train_data_prepare(data=data, ats=ats, bts=bts, cts=cts, args=args)
+            h, xt, xT, t_norm, node_mask, noise, x0, t = train_data_prepare(data=data, ats=ats, bts=bts, cts=cts, args=args)
             pos_predict, node_mask = predict(h, xt, xT, t_norm, node_mask, generative_model, args)
 
             # pos_predict, node_mask, noise, t, x0, xt, xT = (
@@ -185,10 +185,10 @@ def train(args):
 
     epochs = args.epochs
     generative_model = DBIMGenerativeModel().to(device)
-    generative_model = load_model(model_path='saved_model/DBIM.pth', device=device, dtype=dtype)
+    # generative_model = load_model(model_path='saved_model/DBIM.pth', device=device, dtype=dtype)
 
     pretrained_PaiNN = PaiNN(use_pbc=False).to(device)
-    pretrained_PaiNN.load_state_dict(torch.load('saved_model/PaiNN-0525-3')['model_state_dict'])
+    # pretrained_PaiNN.load_state_dict(torch.load('saved_model/PaiNN-0525-3')['model_state_dict'])
 
     optimizer = torch.optim.AdamW(generative_model.parameters(), lr=args.lr, amsgrad=False, weight_decay=1e-12)
     criterion = DBIMLoss()
@@ -217,10 +217,11 @@ def train(args):
             generative_model.train()
             optimizer.zero_grad()
 
-            h, xt, xT, t_norm, node_mask, noise, x0 = train_data_prepare(data=data, ats=ats, bts=bts, cts=cts, args=args)
+            h, xt, xT, t_norm, node_mask, noise, x0, t = train_data_prepare(data=data, ats=ats, bts=bts, cts=cts, args=args)
             pos_predict, node_mask = predict(h, xt, xT, t_norm, node_mask, generative_model, args)
 
-            loss = criterion(model_predict=pos_predict, xt=xt, x0=x0, node_mask=node_mask, noise=noise)
+            sigma_t = sigmas[t]
+            loss = criterion(model_predict=pos_predict, xt=xt, x0=x0, node_mask=node_mask, noise=noise, sigma_t=sigma_t, weighted=True)
 
             # loss, loss_energy, loss_force, loss_npa
             # loss_PaiNN = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)
@@ -261,17 +262,17 @@ def train(args):
                 print(f"Epoch [{epoch + 1}/{epochs}] Batch [{batch_idx}/{len(train_loader)}] DBIM Train Loss: {loss.item():.10f}")
 
         with torch.no_grad():
-            # epoch_loss = epoch_loss / len(train_loader)
-            # if math.isnan(epoch_loss):
-            #     break
+            epoch_loss = epoch_loss / len(train_loader)
+            if math.isnan(epoch_loss):
+                break
 
-            # writer.add_scalar("Loss/epoch_train_loss", epoch_loss, epoch)
+            writer.add_scalar("Loss/epoch_train_loss", epoch_loss, epoch)
 
-            # val_loss = evaluate(val_loader=val_loader, generative_model=generative_model,
-            #              ats=ats, bts=bts, cts=cts, criterion=criterion, pretrained_PaiNN=pretrained_PaiNN, criterion_PaiNN=criterion_PaiNN, args=args)
+            val_loss = evaluate(val_loader=val_loader, generative_model=generative_model,
+                         ats=ats, bts=bts, cts=cts, criterion=criterion, pretrained_PaiNN=pretrained_PaiNN, criterion_PaiNN=criterion_PaiNN, args=args)
 
-            # print(f"Epoch [{epoch + 1}/{epochs}] Val Loss: {val_loss:.10f}")
-            # writer.add_scalar("Loss/epoch_val_loss", val_loss, epoch)
+            print(f"Epoch [{epoch + 1}/{epochs}] Val Loss: {val_loss:.10f}")
+            writer.add_scalar("Loss/epoch_val_loss", val_loss, epoch)
 
             if epoch % 1 == 0:
                 val_sample_loss = 0.0
