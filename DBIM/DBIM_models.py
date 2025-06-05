@@ -7,9 +7,10 @@ import numpy as np
 
 
 class DBIMLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, sigma_data=0.5):
         super(DBIMLoss, self).__init__()
         self.mse_loss = nn.MSELoss()
+        self.sigma_data = sigma_data
 
     def forward(self, model_predict, xt, x0, node_mask, noise):
 

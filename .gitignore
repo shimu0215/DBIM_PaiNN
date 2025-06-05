@@ -2,3 +2,4 @@ DBIM/__pycache__/
 PaiNN/__pycache__/
 saved_model/
 DBIM_log/
+DBIM/DBIM_argument.py

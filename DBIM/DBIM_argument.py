@@ -24,7 +24,7 @@ def parse_opt_DBIM():
 
     parser.add_argument('--training', type=bool, default=True, help='Computation device.')
 
-    parser.add_argument('--sample_steps', type=int, default=10, help='Computation device.')
+    parser.add_argument('--sample_steps', type=int, default=20, help='Computation device.')
 
     args, unknowns = parser.parse_known_args()
 

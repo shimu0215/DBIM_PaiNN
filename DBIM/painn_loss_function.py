@@ -13,9 +13,13 @@ class energy_force_npa_Loss(nn.Module):
         energy_grad = pred['forces']
         npa_charges = pred['npa_charges']
 
-        loss_energy = F.mse_loss(energy, data.energy)
-        loss_force = F.mse_loss(energy_grad, data.energy_grad)
-        loss_npa = F.mse_loss(npa_charges, data.npa_charges)
+        # loss_energy = F.mse_loss(energy, data.energy)
+        # loss_force = F.mse_loss(energy_grad, data.energy_grad)
+        # loss_npa = F.mse_loss(npa_charges, data.npa_charges)
+
+        loss_energy = F.l1_loss(energy, data.energy)
+        loss_force = F.l1_loss(energy_grad, data.energy_grad)
+        loss_npa = F.l1_loss(npa_charges, data.npa_charges)
 
         # lambda_1 = 1.0 / (loss_energy.item() + 1e-6)
         # lambda_2 = 1.0 / (loss_force.item() + 1e-6)

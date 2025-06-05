@@ -24,20 +24,56 @@ def sampling(data, ats, bts, rhos, generative_model, args):
     ts = torch.round(t_norm*args.T).int()
 
     x, h, node_mask, xT = data_prepare(data=data, args=args)
+
+    x0 = x.clone()
+    xT = perturb_coordinates(x0=x0)
+    xT = sub_center(xT)
     xt = xT.clone()
 
-    for t in reversed(ts):  # 从 t_max 到 0
+    for t in reversed(ts):  
         at = ats[t]
         bt = bts[t]
+        # ct = cts[t]
         rt = rhos[t]
 
         noise = torch.randn_like(xT)
         noise = sub_center(noise)
 
-        x0_hat, node_mask = predict(h, xt, xT, t_norm, node_mask, generative_model, args)
+        ht = h.clone()
+        tt = t.expand(h.size(0), x.size(1), 1) / args.T
+
+        x0_hat, node_mask = predict(ht, xt, xT, tt, node_mask, generative_model, args)
         xt = at * xT + bt * x0_hat + rt * noise
+        # xt = at * xT + bt * x0_hat
+        # xt = at * xT + bt * x0_hat + rt * noise + torch.sqrt(ct ** 2 - rt ** 2) * 
+        xt = sub_center(xt)
+
+        loss = F.mse_loss(x0_hat * node_mask, x0 * node_mask)
+        print('t:', t, 'dis:', loss)
+        
 
     return xt, x, node_mask
+
+def predict(h, xt, xT, t_norm, node_mask, generative_model, args):
+
+    atom_type_scaling = args.atom_type_scaling
+    max_atom_number = args.max_atom_number
+    curr_batch_size = xt.size()[0]
+
+    h = torch.cat([h, xt], dim=-1)
+    h = torch.cat([h, xT], dim=-1)
+    h = torch.cat([h, t_norm], dim=-1)
+
+    if len(node_mask.shape) == 3:
+        node_mask = node_mask.squeeze(-1)
+
+    _, pos_predict = generative_model(xt=xt, h=h, mask=node_mask)
+
+    pos_predict = sub_center(pos_predict)
+
+    node_mask = node_mask.view(curr_batch_size, max_atom_number, -1)
+
+    return pos_predict, node_mask
 
 def evaluate(val_loader, generative_model, ats, bts, cts, criterion, pretrained_PaiNN, criterion_PaiNN, args):
     with torch.no_grad():
@@ -50,9 +86,10 @@ def evaluate(val_loader, generative_model, ats, bts, cts, criterion, pretrained_
 
             # pos_predict, node_mask, noise, t, x0, xt, xT = (
             #     predict(data=data, generative_model=generative_model, ats=ats, bts=bts, cts=cts, args=args))
-            PaiNN_evaluating_loss = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)[0]
+            # PaiNN_evaluating_loss = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)[0]
             DBIM_evaluating_loss = criterion(model_predict=pos_predict, xt=xt, x0=x0, node_mask=node_mask, noise=noise)
-            loss = DBIM_evaluating_loss + PaiNN_evaluating_loss
+            # loss = DBIM_evaluating_loss + PaiNN_evaluating_loss
+            loss = DBIM_evaluating_loss
             evaluating_loss += loss
 
         evaluating_loss = evaluating_loss / len(val_loader)
@@ -116,26 +153,7 @@ def train_data_prepare(data, ats, bts, cts, args):
     xt = ats[t] * xT + bts[t] * x0 + cts[t] * noise
     xt = sub_center(xt)
 
-    return h, xt, xT, t_norm, node_mask, noise, x0
-
-
-def predict(h, xt, xT, t_norm, node_mask, generative_model, args):
-
-    atom_type_scaling = args.atom_type_scaling
-    max_atom_number = args.max_atom_number
-    curr_batch_size = xt.size()[0]
-
-    h = torch.cat([h, xt], dim=-1)
-    h = torch.cat([h, xT], dim=-1)
-    h = torch.cat([h, t_norm], dim=-1)
-
-    _, pos_predict = generative_model(xt=xt, h=h, mask=node_mask)
-
-    pos_predict = sub_center(pos_predict)
-
-    node_mask = node_mask.view(curr_batch_size, max_atom_number, -1)
-
-    return pos_predict, node_mask
+    return h, xt, xT, t_norm, node_mask, noise, x0, t
 
 def predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args):
     device = args.device
@@ -177,7 +195,7 @@ def train(args):
     criterion_PaiNN = energy_force_npa_Loss()
 
     T = args.T
-    ats, bts, cts, rhos, sigmas = make_noise_schedule(T=T, eta=1.0, device=device)
+    ats, bts, cts, rhos, sigmas = make_noise_schedule(T=T, eta=0.0, device=device)
 
     atom_type_scaling = args.atom_type_scaling
     max_atom_number = args.max_atom_number
@@ -195,21 +213,19 @@ def train(args):
     for epoch in range(epochs):
         epoch_loss = 0.0
         for batch_idx, data in enumerate(train_loader):
+            # continue
             generative_model.train()
             optimizer.zero_grad()
 
             h, xt, xT, t_norm, node_mask, noise, x0 = train_data_prepare(data=data, ats=ats, bts=bts, cts=cts, args=args)
             pos_predict, node_mask = predict(h, xt, xT, t_norm, node_mask, generative_model, args)
 
-            # pos_predict, node_mask, noise, t, x0, xt, xT = (
-            #     predict(data=data, generative_model=generative_model, ats=ats, bts=bts, cts=cts, args=args))
-
-            loss_DBIM = criterion(model_predict=pos_predict, xt=xt, x0=x0, node_mask=node_mask, noise=noise)
+            loss = criterion(model_predict=pos_predict, xt=xt, x0=x0, node_mask=node_mask, noise=noise)
 
             # loss, loss_energy, loss_force, loss_npa
-            loss_PaiNN = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)
+            # loss_PaiNN = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)
 
-            loss = loss_DBIM + loss_PaiNN[0]
+            # loss = loss_DBIM + loss_PaiNN[0]
             with torch.autograd.set_detect_anomaly(True):
                 loss.backward()
             # torch.nn.utils.clip_grad_norm_(generative_model.parameters(), max_norm=1.0)
@@ -219,20 +235,20 @@ def train(args):
                 epoch_loss += loss
 
                 writer.add_scalar("Loss/batch_loss", loss, batch_count+1)
-                writer.add_scalar("Loss/batch_loss_DBIM", loss_DBIM, batch_count+1)
-                writer.add_scalar("Loss/batch_loss_PaiNN", loss_PaiNN[0], batch_count+1)
-                writer.add_scalar("Loss/batch_loss_energy", loss_PaiNN[1], batch_count+1)
-                writer.add_scalar("Loss/batch_loss_force", loss_PaiNN[2], batch_count+1)
-                writer.add_scalar("Loss/batch_loss_npa", loss_PaiNN[3], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_DBIM", loss_DBIM, batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_PaiNN", loss_PaiNN[0], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_energy", loss_PaiNN[1], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_force", loss_PaiNN[2], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_npa", loss_PaiNN[3], batch_count+1)
             else:
                 epoch_loss += batch_result_list[-1]
 
                 writer.add_scalar("Loss/batch_loss", loss, batch_count+1)
-                writer.add_scalar("Loss/batch_loss_DBIM", loss_DBIM, batch_count+1)
-                writer.add_scalar("Loss/batch_loss_PaiNN", loss_PaiNN[0], batch_count+1)
-                writer.add_scalar("Loss/batch_loss_energy", loss_PaiNN[1], batch_count+1)
-                writer.add_scalar("Loss/batch_loss_force", loss_PaiNN[2], batch_count+1)
-                writer.add_scalar("Loss/batch_loss_npa", loss_PaiNN[3], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_DBIM", loss_DBIM, batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_PaiNN", loss_PaiNN[0], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_energy", loss_PaiNN[1], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_force", loss_PaiNN[2], batch_count+1)
+                # writer.add_scalar("Loss/batch_loss_npa", loss_PaiNN[3], batch_count+1)
 
             # epoch_loss += loss
             # batch_result_list.append(loss)
@@ -240,41 +256,44 @@ def train(args):
 
             batch_count += 1
 
-            continue 
-
             if batch_idx % 100 == 0:
-                print(f"Epoch [{epoch + 1}/{epochs}] Batch [{batch_idx}/{len(train_loader)}] DBIM Train Loss: {loss_DBIM.item():.10f} PaiNN Eval Loss: {loss_PaiNN[0].item():.10f} Total Loss: {loss.item():.10f}")
+                # print(f"Epoch [{epoch + 1}/{epochs}] Batch [{batch_idx}/{len(train_loader)}] DBIM Train Loss: {loss_DBIM.item():.10f} PaiNN Eval Loss: {loss_PaiNN[0].item():.10f} Total Loss: {loss.item():.10f}")
+                print(f"Epoch [{epoch + 1}/{epochs}] Batch [{batch_idx}/{len(train_loader)}] DBIM Train Loss: {loss.item():.10f}")
 
         with torch.no_grad():
-            epoch_loss = epoch_loss / len(train_loader)
-            if math.isnan(epoch_loss):
-                break
+            # epoch_loss = epoch_loss / len(train_loader)
+            # if math.isnan(epoch_loss):
+            #     break
 
-            writer.add_scalar("Loss/epoch_train_loss", epoch_loss, epoch)
+            # writer.add_scalar("Loss/epoch_train_loss", epoch_loss, epoch)
 
-            val_loss = evaluate(val_loader=val_loader, generative_model=generative_model,
-                         ats=ats, bts=bts, cts=cts, criterion=criterion, pretrained_PaiNN=pretrained_PaiNN, criterion_PaiNN=criterion_PaiNN, args=args)
+            # val_loss = evaluate(val_loader=val_loader, generative_model=generative_model,
+            #              ats=ats, bts=bts, cts=cts, criterion=criterion, pretrained_PaiNN=pretrained_PaiNN, criterion_PaiNN=criterion_PaiNN, args=args)
 
-            print(f"Epoch [{epoch + 1}/{epochs}] Val Loss: {val_loss:.10f}")
-            writer.add_scalar("Loss/epoch_val_loss", val_loss, epoch)
+            # print(f"Epoch [{epoch + 1}/{epochs}] Val Loss: {val_loss:.10f}")
+            # writer.add_scalar("Loss/epoch_val_loss", val_loss, epoch)
 
             if epoch % 1 == 0:
                 val_sample_loss = 0.0
                 val_predict_loss = torch.zeros(4)
                 for batch_idx, data in enumerate(val_loader):
                     x_predict, x0_val, node_mask = sampling(data=data, ats=ats, bts=bts, rhos=rhos, generative_model=generative_model, args=args)
-                    
-                    PaiNN_loss = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)
-                    val_predict_loss += PaiNN_loss
-
                     loss = F.mse_loss(x_predict * node_mask, x0_val * node_mask)
-                    val_sample_loss += loss
+                    # print(loss)
+
+                    # if loss.item() <= 1:
+                    #     PaiNN_loss = predict_paiNN(data, node_mask, x_predict, pretrained_PaiNN, criterion_PaiNN, args)
+                        # val_predict_loss += PaiNN_loss
+
+                        # val_sample_loss += loss
+                        # print(PaiNN_loss)
 
                 print(f"Epoch [{epoch + 1}/{epochs}] Val Sample Loss: {val_sample_loss/len(val_loader):.10f}")
-                writer.add_scalar("Loss/val_sample_loss_pos", val_sample_loss, epoch)
-                writer.add_scalar("Loss/val_sample_loss_energy", val_predict_loss[1], batch_count+1)
-                writer.add_scalar("Loss/val_sample_loss_force", val_predict_loss[2], batch_count+1)
-                writer.add_scalar("Loss/val_sample_loss_npa", val_predict_loss[3], batch_count+1)
+                # print(f"Epoch [{epoch + 1}/{epochs}] Val Sample Loss: {val_sample_loss/len(val_loader):.10f}")
+                # writer.add_scalar("Loss/val_sample_loss_pos", val_sample_loss, epoch)
+                # writer.add_scalar("Loss/val_sample_loss_energy", val_predict_loss[1], batch_count+1)
+                # writer.add_scalar("Loss/val_sample_loss_force", val_predict_loss[2], batch_count+1)
+                # writer.add_scalar("Loss/val_sample_loss_npa", val_predict_loss[3], batch_count+1)
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
