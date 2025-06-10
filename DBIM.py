@@ -11,11 +11,11 @@ from torch_geometric.data import Data
 from DBIM_argument import parse_opt_DBIM
 from DBIM_read_data import read_dataset
 from DBIM_utils import sample_time_step, perturb_coordinates, sub_center, plot_result, read_list, load_model
-from DBIM_models import DBIMGenerativeModel, DBIMLoss
+from DBIM_models import DBIMGenerativeModel
+from loss_functions import DBIMLoss, PaiNNLoss
 from make_schedule import make_noise_schedule
 
-from painn_model import PaiNN
-from painn_loss_function import energy_force_npa_Loss
+from PaiNN.painn_model import PaiNN
 
 
 def sampling(data, ats, bts, rhos, generative_model, args):
@@ -30,6 +30,9 @@ def sampling(data, ats, bts, rhos, generative_model, args):
     xT = sub_center(xT)
     xt = xT.clone()
 
+    x0_hat_0 = None
+    flag = True
+
     for t in reversed(ts):  
         at = ats[t]
         bt = bts[t]
@@ -43,16 +46,19 @@ def sampling(data, ats, bts, rhos, generative_model, args):
         tt = t.expand(h.size(0), x.size(1), 1) / args.T
 
         x0_hat, node_mask = predict(ht, xt, xT, tt, node_mask, generative_model, args)
+        if flag:
+            x0_hat_0 = x0_hat
+            flag = False
         xt = at * xT + bt * x0_hat + rt * noise
         # xt = at * xT + bt * x0_hat
         # xt = at * xT + bt * x0_hat + rt * noise + torch.sqrt(ct ** 2 - rt ** 2) * 
         xt = sub_center(xt)
 
-        loss = F.mse_loss(x0_hat * node_mask, x0 * node_mask)
-        print('t:', t, 'dis:', loss)
+        # loss = F.mse_loss(x0_hat * node_mask, x0 * node_mask)
+        # print('t:', t, 'dis:', loss)
         
 
-    return xt, x, node_mask
+    return xt, x, node_mask, x0_hat, x0_hat_0
 
 def predict(h, xt, xT, t_norm, node_mask, generative_model, args):
 
@@ -84,8 +90,6 @@ def evaluate(val_loader, generative_model, ats, bts, cts, criterion, pretrained_
             h, xt, xT, t_norm, node_mask, noise, x0, t = train_data_prepare(data=data, ats=ats, bts=bts, cts=cts, args=args)
             pos_predict, node_mask = predict(h, xt, xT, t_norm, node_mask, generative_model, args)
 
-            # pos_predict, node_mask, noise, t, x0, xt, xT = (
-            #     predict(data=data, generative_model=generative_model, ats=ats, bts=bts, cts=cts, args=args))
             # PaiNN_evaluating_loss = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)[0]
             DBIM_evaluating_loss = criterion(model_predict=pos_predict, xt=xt, x0=x0, node_mask=node_mask, noise=noise)
             # loss = DBIM_evaluating_loss + PaiNN_evaluating_loss
@@ -142,7 +146,7 @@ def train_data_prepare(data, ats, bts, cts, args):
     t_norm = t / T
 
     x0 = x.clone()
-    xT = perturb_coordinates(x0=x0)
+    # xT = perturb_coordinates(x0=x0)
     xT = sub_center(xT)
 
     noise = torch.randn_like(xT, device=device)
@@ -170,29 +174,39 @@ def predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiN
         natoms=data.natoms.to(device).clone()
     )
 
+    data_gt = Data(
+        pos=data.x.to(device)[node_mask.view(-1)].clone(),
+        batch=data.batch.to(device)[node_mask.view(-1)].clone(),
+        atomic_numbers=data.atomic_numbers.to(device)[node_mask.view(-1)].clone(),
+        energy=data.energy.to(device).clone(),
+        energy_grad=data.energy_grad.to(device)[node_mask.view(-1)].clone(),
+        npa_charges=data.npa_charges.to(device)[node_mask.view(-1)].clone(),
+        natoms=data.natoms.to(device).clone()
+    )
+
     pred = pretrained_PaiNN(data_PaiNN)
     loss, loss_energy, loss_force, loss_npa = criterion_PaiNN(pred=pred, data=data_PaiNN)
+    with torch.no_grad():
+        loss_ref = criterion_PaiNN(pred=pred, data=data_gt)
 
-    return loss, loss_energy, loss_force, loss_npa
+    return loss, loss_energy, loss_force, loss_npa, loss_ref
 
 def train(args):
 
     device = args.device
     dtype = torch.float32
-
-    # train_loader, val_loader, test_loader = read_dataloader(args)
     train_loader, val_loader, test_loader = read_list(args.data_path, args)
 
     epochs = args.epochs
     generative_model = DBIMGenerativeModel().to(device)
-    # generative_model = load_model(model_path='saved_model/DBIM.pth', device=device, dtype=dtype)
+    generative_model = load_model(model_path='saved_model/DBIM_model_gamma_3.pth', device=device, dtype=dtype)
 
     pretrained_PaiNN = PaiNN(use_pbc=False).to(device)
     # pretrained_PaiNN.load_state_dict(torch.load('saved_model/PaiNN-0525-3')['model_state_dict'])
 
     optimizer = torch.optim.AdamW(generative_model.parameters(), lr=args.lr, amsgrad=False, weight_decay=1e-12)
     criterion = DBIMLoss()
-    criterion_PaiNN = energy_force_npa_Loss()
+    criterion_PaiNN = PaiNNLoss()
 
     T = args.T
     ats, bts, cts, rhos, sigmas = make_noise_schedule(T=T, eta=0.0, device=device)
@@ -207,13 +221,13 @@ def train(args):
     patience = args.patience
     counter = 0
 
-    writer = SummaryWriter(log_dir=f"../DBIM_log/exp_on_whole_1_x0_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    writer = SummaryWriter(log_dir=f"DBIM_log/whole_gamma_x0_D_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     batch_count = 0
 
     for epoch in range(epochs):
         epoch_loss = 0.0
         for batch_idx, data in enumerate(train_loader):
-            # continue
+            continue
             generative_model.train()
             optimizer.zero_grad()
 
@@ -225,11 +239,10 @@ def train(args):
 
             # loss, loss_energy, loss_force, loss_npa
             # loss_PaiNN = predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiNN, args)
-
             # loss = loss_DBIM + loss_PaiNN[0]
-            with torch.autograd.set_detect_anomaly(True):
-                loss.backward()
-            # torch.nn.utils.clip_grad_norm_(generative_model.parameters(), max_norm=1.0)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(generative_model.parameters(), max_norm=1.0)
             optimizer.step()
 
             if loss < 2 or len(batch_result_list) == 0:
@@ -262,44 +275,57 @@ def train(args):
                 print(f"Epoch [{epoch + 1}/{epochs}] Batch [{batch_idx}/{len(train_loader)}] DBIM Train Loss: {loss.item():.10f}")
 
         with torch.no_grad():
-            epoch_loss = epoch_loss / len(train_loader)
-            if math.isnan(epoch_loss):
-                break
+            # epoch_loss = epoch_loss / len(train_loader)
+            # if math.isnan(epoch_loss):
+            #     break
 
-            writer.add_scalar("Loss/epoch_train_loss", epoch_loss, epoch)
+            # writer.add_scalar("Loss/epoch_train_loss", epoch_loss, epoch)
 
-            val_loss = evaluate(val_loader=val_loader, generative_model=generative_model,
-                         ats=ats, bts=bts, cts=cts, criterion=criterion, pretrained_PaiNN=pretrained_PaiNN, criterion_PaiNN=criterion_PaiNN, args=args)
+            # val_loss = evaluate(val_loader=val_loader, generative_model=generative_model,
+            #              ats=ats, bts=bts, cts=cts, criterion=criterion, pretrained_PaiNN=pretrained_PaiNN, criterion_PaiNN=criterion_PaiNN, args=args)
 
-            print(f"Epoch [{epoch + 1}/{epochs}] Val Loss: {val_loss:.10f}")
-            writer.add_scalar("Loss/epoch_val_loss", val_loss, epoch)
+            # print(f"Epoch [{epoch + 1}/{epochs}] Val Loss: {val_loss:.10f}")
+            # writer.add_scalar("Loss/epoch_val_loss", val_loss, epoch)
 
             if epoch % 1 == 0:
                 val_sample_loss = 0.0
+                ref_loss = 0.0
+                ref_loss_0 = 0.0
                 val_predict_loss = torch.zeros(4)
+                val_ref_loss = torch.zeros(4)
                 for batch_idx, data in enumerate(val_loader):
-                    x_predict, x0_val, node_mask = sampling(data=data, ats=ats, bts=bts, rhos=rhos, generative_model=generative_model, args=args)
+                    x_predict, x0_val, node_mask, x0_hat, x0_hat_0 = sampling(data=data, ats=ats, bts=bts, rhos=rhos, generative_model=generative_model, args=args)
                     loss = F.mse_loss(x_predict * node_mask, x0_val * node_mask)
+                    ref_loss += F.mse_loss(x0_hat * node_mask, x0_val * node_mask)
+                    ref_loss_0 += F.mse_loss(x0_hat_0 * node_mask, x0_val * node_mask)
                     # print(loss)
 
                     # if loss.item() <= 1:
-                    #     PaiNN_loss = predict_paiNN(data, node_mask, x_predict, pretrained_PaiNN, criterion_PaiNN, args)
-                        # val_predict_loss += PaiNN_loss
+                    PaiNN_loss = predict_paiNN(data, node_mask, x_predict, pretrained_PaiNN, criterion_PaiNN, args)
+                    val_predict_loss += PaiNN_loss[:4]
+                    val_ref_loss += PaiNN_loss[-1]
 
-                        # val_sample_loss += loss
+                    val_sample_loss += loss
                         # print(PaiNN_loss)
+                    if batch_idx % 10 == 0:
+                        print(f"Epoch [{epochs}] Batch [{batch_idx}/{len(val_loader)}] complete")
 
                 print(f"Epoch [{epoch + 1}/{epochs}] Val Sample Loss: {val_sample_loss/len(val_loader):.10f}")
+                # print(f"Epoch [{epoch + 1}/{epochs}] Val Sample ref x0 Loss: {ref_loss/len(val_loader):.10f}")
+                # print(f"Epoch [{epoch + 1}/{epochs}] Val Sample ref x0hat Loss: {ref_loss_0/len(val_loader):.10f}")
                 # print(f"Epoch [{epoch + 1}/{epochs}] Val Sample Loss: {val_sample_loss/len(val_loader):.10f}")
                 # writer.add_scalar("Loss/val_sample_loss_pos", val_sample_loss, epoch)
                 # writer.add_scalar("Loss/val_sample_loss_energy", val_predict_loss[1], batch_count+1)
                 # writer.add_scalar("Loss/val_sample_loss_force", val_predict_loss[2], batch_count+1)
                 # writer.add_scalar("Loss/val_sample_loss_npa", val_predict_loss[3], batch_count+1)
 
+                print(f"Epoch [{epoch + 1}/{epochs}] Val Sample Loss: {val_sample_loss/len(val_loader):.10f}")
+
+
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 counter = 0
-                torch.save(generative_model.state_dict(), 'saved_model/DBIM_model.pth')
+                torch.save(generative_model.state_dict(), 'saved_model/DBIM_model_gamma_3.pth')
             else:
                 counter += 1
                 if counter >= patience:
