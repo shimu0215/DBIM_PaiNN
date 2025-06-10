@@ -175,7 +175,7 @@ def predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiN
     )
 
     data_gt = Data(
-        pos=data.x.to(device)[node_mask.view(-1)].clone(),
+        pos=data.pos.to(device)[node_mask.view(-1)].clone(),
         batch=data.batch.to(device)[node_mask.view(-1)].clone(),
         atomic_numbers=data.atomic_numbers.to(device)[node_mask.view(-1)].clone(),
         energy=data.energy.to(device).clone(),
@@ -187,9 +187,13 @@ def predict_paiNN(data, node_mask, pos_predict, pretrained_PaiNN, criterion_PaiN
     pred = pretrained_PaiNN(data_PaiNN)
     loss, loss_energy, loss_force, loss_npa = criterion_PaiNN(pred=pred, data=data_PaiNN)
     with torch.no_grad():
-        loss_ref = criterion_PaiNN(pred=pred, data=data_gt)
+        pred_ref = pretrained_PaiNN(data_gt)
+        energy_dis = F.mse_loss(pred['energy'], pred_ref['energy'])
+        force_dis = F.mse_loss(pred['forces'], pred_ref['forces'])
+        npa_dis = F.mse_loss(pred['npa_charges'], pred_ref['npa_charges'])
+        dis = torch.stack([energy_dis, force_dis, npa_dis], dim=0)
 
-    return loss, loss_energy, loss_force, loss_npa, loss_ref
+    return loss, loss_energy, loss_force, loss_npa, dis
 
 def train(args):
 
@@ -199,7 +203,7 @@ def train(args):
 
     epochs = args.epochs
     generative_model = DBIMGenerativeModel().to(device)
-    generative_model = load_model(model_path='saved_model/DBIM_model_gamma_3.pth', device=device, dtype=dtype)
+    # generative_model = load_model(model_path='saved_model/DBIM_model_gamma_3.pth', device=device, dtype=dtype)
 
     pretrained_PaiNN = PaiNN(use_pbc=False).to(device)
     # pretrained_PaiNN.load_state_dict(torch.load('saved_model/PaiNN-0525-3')['model_state_dict'])
@@ -291,22 +295,19 @@ def train(args):
                 val_sample_loss = 0.0
                 ref_loss = 0.0
                 ref_loss_0 = 0.0
-                val_predict_loss = torch.zeros(4)
-                val_ref_loss = torch.zeros(4)
+
+                pred_gt_dis = torch.zeros(3).to(device)
                 for batch_idx, data in enumerate(val_loader):
                     x_predict, x0_val, node_mask, x0_hat, x0_hat_0 = sampling(data=data, ats=ats, bts=bts, rhos=rhos, generative_model=generative_model, args=args)
                     loss = F.mse_loss(x_predict * node_mask, x0_val * node_mask)
                     ref_loss += F.mse_loss(x0_hat * node_mask, x0_val * node_mask)
                     ref_loss_0 += F.mse_loss(x0_hat_0 * node_mask, x0_val * node_mask)
-                    # print(loss)
+                    val_sample_loss += loss
 
                     # if loss.item() <= 1:
                     PaiNN_loss = predict_paiNN(data, node_mask, x_predict, pretrained_PaiNN, criterion_PaiNN, args)
-                    val_predict_loss += PaiNN_loss[:4]
-                    val_ref_loss += PaiNN_loss[-1]
+                    pred_gt_dis += PaiNN_loss[-1]
 
-                    val_sample_loss += loss
-                        # print(PaiNN_loss)
                     if batch_idx % 10 == 0:
                         print(f"Epoch [{epochs}] Batch [{batch_idx}/{len(val_loader)}] complete")
 
@@ -319,7 +320,8 @@ def train(args):
                 # writer.add_scalar("Loss/val_sample_loss_force", val_predict_loss[2], batch_count+1)
                 # writer.add_scalar("Loss/val_sample_loss_npa", val_predict_loss[3], batch_count+1)
 
-                print(f"Epoch [{epoch + 1}/{epochs}] Val Sample Loss: {val_sample_loss/len(val_loader):.10f}")
+                # print(f"Epoch [{epoch + 1}/{epochs}] Val Sample Loss: {pred_gt_dis/len(val_loader):.10f}")
+                print(pred_gt_dis/len(val_loader))
 
 
             if val_loss < best_val_loss:
