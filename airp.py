@@ -145,7 +145,7 @@ def sampling(data, ats, bts, cts, rhos, generative_model, args):
     x, h, node_mask, xT = data_prepare(data=data, args=args)
 
     x0 = x.clone()
-    xT = perturb_coordinates(x0=x0, noise_std=args.noise_level)
+    # xT = perturb_coordinates(x0=x0, noise_std=args.noise_level)
     xT = sub_center(xT)
     xt = xT.clone()
 
