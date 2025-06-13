@@ -1,13 +1,13 @@
-import torch
-from DBIM_read_data import read_dataset, split_dataset
-from torch_geometric.loader import DataLoader
-
-from DBIM_models import DBIMGenerativeModel
-from DBIM_argument import parse_opt_DBIM
-
 import glob
 import os
-import re
+import matplotlib.pyplot as plt
+
+import torch
+from torch_geometric.loader import DataLoader
+
+from DBIM_read_data import read_dataset, split_dataset
+from DBIM_models import DBIMGenerativeModel
+from DBIM_argument import parse_opt
 
 def read_list(path, args):
     file_list = glob.glob(os.path.join(path, "qm9star_*_chunk*_processed.pt"))
@@ -45,22 +45,6 @@ def read_dataloader(args):
     test_loader = DataLoader(test_list, batch_size=batch_size)
 
     return train_loader, val_loader, test_loader
-
-def perturb_coordinates(x0, noise_std=0.5):
-
-    noise = torch.randn_like(x0) * noise_std
-    xT = x0 + noise
-    return xT
-
-def sub_center(x):
-
-    center_of_mass = x.mean(dim=-2, keepdim=True)
-
-    result = x - center_of_mass
-
-    return result
-
-import matplotlib.pyplot as plt
 
 def plot_result(result_list, name):
     x = list(range(len(result_list))) 
@@ -102,8 +86,16 @@ def sample_time_step(x, T):
 
     return t_val
 
-if __name__ == "__main__":
-    args = parse_opt_DBIM()
-    train_list, val_list, test_list = read_list("../data/tmp", args)
 
-    print(train_list)
+def perturb_coordinates(x0, noise_std=0.5):
+
+    noise = torch.randn_like(x0) * noise_std
+    xT = x0 + noise
+    return xT
+
+
+def sub_center(x):
+
+    center_of_mass = x.mean(dim=-2, keepdim=True)
+    result = x - center_of_mass
+    return result

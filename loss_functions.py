@@ -9,7 +9,7 @@ class DBIMLoss(nn.Module):
         self.mse_loss = nn.MSELoss()
         self.sigma_data = sigma_data
 
-    def forward(self, model_predict, xt, x0, node_mask, noise, sigma_t=None, weighted=False):
+    def forward(self, model_predict, x0, node_mask, sigma_t=None, weighted=False):
 
         # F_theta = model_predict - xt
         # x_theta = xt - F_theta
